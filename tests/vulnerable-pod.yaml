@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vulnerable-pod
+spec:
+  hostNetwork: true
+  hostPID: true
+  containers:
+  - name: bad-container
+    image: nginx:latest
+    securityContext:
+      privileged: true
+      runAsUser: 0
+      capabilities:
+        add: ["SYS_ADMIN", "NET_RAW"]

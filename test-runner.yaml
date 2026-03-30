@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: k8s-psa-tester
+  namespace: default
+spec:
+  serviceAccountName: default
+  automountServiceAccountToken: true
+  containers:
+  - name: tester
+    image: python:3.9-slim
+    command: ["sleep", "86400"]  # Keep container running for 24 hours
+    securityContext:
+      runAsUser: 1000
+    volumeMounts:
+    - name: source-code
+      mountPath: /app
+    - name: kube-config
+      mountPath: /root/.kube
+    workingDir: /app
+  volumes:
+  - name: source-code
+    hostPath:
+      path: /absolute/path/to/your/k8s-psa-test  # UPDATE THIS PATH
+      type: Directory
+  - name: kube-config
+    hostPath:
+      path: /absolute/path/to/your/.kube/config  # UPDATE THIS PATH
+      type: File
