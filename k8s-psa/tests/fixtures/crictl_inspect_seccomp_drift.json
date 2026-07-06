@@ -1,0 +1,49 @@
+{
+  "status": {
+    "id": "drift001seccomp",
+    "metadata": {
+      "name": "drifted-container"
+    },
+    "state": "CONTAINER_RUNNING"
+  },
+  "info": {
+    "pid": 99999,
+    "runtimeSpec": {
+      "process": {
+        "user": {
+          "uid": 1000,
+          "gid": 1000
+        },
+        "capabilities": {
+          "bounding": [
+            "CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_FSETID","CAP_FOWNER",
+            "CAP_MKNOD","CAP_NET_RAW","CAP_SETGID","CAP_SETUID",
+            "CAP_SETFCAP","CAP_SETPCAP","CAP_NET_BIND_SERVICE",
+            "CAP_SYS_CHROOT","CAP_KILL","CAP_AUDIT_WRITE"
+          ],
+          "effective": [
+            "CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_FSETID","CAP_FOWNER",
+            "CAP_MKNOD","CAP_NET_RAW","CAP_SETGID","CAP_SETUID",
+            "CAP_SETFCAP","CAP_SETPCAP","CAP_NET_BIND_SERVICE",
+            "CAP_SYS_CHROOT","CAP_KILL","CAP_AUDIT_WRITE"
+          ],
+          "permitted": [],
+          "inheritable": [],
+          "ambient": []
+        },
+        "noNewPrivileges": false
+      },
+      "root": {
+        "readonly": true
+      },
+      "linux": {
+        "seccomp": null,
+        "maskedPaths": [
+          "/proc/asound","/proc/acpi","/proc/kcore",
+          "/proc/keys","/proc/latency_stats"
+        ],
+        "readonlyPaths": ["/proc/bus","/proc/fs"]
+      }
+    }
+  }
+}

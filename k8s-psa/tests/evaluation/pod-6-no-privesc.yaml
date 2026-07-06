@@ -1,0 +1,46 @@
+# TEST CASE 6: Privilege Escalation Control
+# Purpose: Tests the allowPrivilegeEscalation → noNewPrivileges mapping.
+# Kubernetes translates allowPrivilegeEscalation=false to the Linux
+# PR_SET_NO_NEW_PRIVS flag (noNewPrivileges=true in OCI spec).
+# This is an INVERTED boolean.
+#
+# Config: allowPrivilegeEscalation=false, other settings secure.
+#
+# EXPECTED LAYER 1: 0 spec violations
+#
+# EXPECTED LAYER 2:
+#   CRITICAL (0):
+#     - If Docker correctly sets noNewPrivileges=true → match, no finding
+#     - If Docker does NOT set it → CRITICAL privilege_escalation
+#       (this would be a real enforcement gap discovery!)
+#   WARNING (0): no unexpected additions expected
+#   INFO (0): no benign defaults expected (caps dropped, seccomp set)
+#
+# VERIFICATION: After deploying, check:
+#   docker inspect <container_id> | grep -i "no-new-priv"
+# Should show "no-new-privileges" in SecurityOpt if correctly enforced.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-6-no-privesc
+  namespace: default
+  labels:
+    test-case: "6-privilege-escalation"
+    expected-l1: "0-violations"
+    expected-l2-critical: "0-or-1"
+    expected-l2-warning: "0"
+spec:
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: no-privesc-app
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      runAsUser: 1000
+      runAsNonRoot: true
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]

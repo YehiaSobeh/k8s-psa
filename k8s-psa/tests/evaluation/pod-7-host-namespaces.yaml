@@ -1,0 +1,51 @@
+# TEST CASE 7: Host Namespace Access
+# Purpose: Tests namespace drift detection. Pod declares host namespaces.
+# On Docker/Minikube, the runtime's PidMode/NetworkMode values may not
+# always match the K8s hostPID/hostNetwork flags exactly, creating
+# observable drift.
+#
+# Config: hostPID=true, hostNetwork=true, hostIPC=true
+# Also adds SYS_ADMIN cap to avoid crash on some hosts.
+#
+# EXPECTED LAYER 1: 3+ spec violations
+#   - host_network (medium)
+#   - host_pid (medium)
+#   - host_ipc (medium)
+#   - seccomp_profile (medium): no seccomp declared
+#   - capabilities (medium): SYS_ADMIN is dangerous
+#   - read_only_root (low)
+#
+# EXPECTED LAYER 2:
+#   Namespace checks depend on how Docker maps K8s host namespace flags:
+#   - If Docker PidMode="host" → ns_pid=2, spec=true → MATCH (no finding)
+#   - If Docker PidMode="" → ns_pid=0, spec=true → INFO (benign, runtime isolated)
+#   From your previous data, hostNetwork pods showed "isolated (mode=0)"
+#   suggesting Docker/K8s uses CNI, not Docker --net=host. So expect:
+#
+#   CRITICAL (0): unlikely — runtime usually doesn't GAIN host access not declared
+#   WARNING (0): no unexpected additions
+#   INFO (1-3): spec says host=true but runtime shows isolated
+#     This is actually interesting for the thesis — it shows that
+#     K8s implements host namespaces differently than Docker's native flags.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-7-host-namespaces
+  namespace: default
+  labels:
+    test-case: "7-host-namespaces"
+    expected-l1: "5-6-violations"
+    expected-l2-critical: "0"
+    expected-l2-warning: "0"
+    expected-l2-info: "1-3"
+spec:
+  hostNetwork: true
+  hostPID: true
+  hostIPC: true
+  containers:
+  - name: host-ns-app
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      capabilities:
+        add: ["SYS_ADMIN"]

@@ -1,0 +1,39 @@
+# TEST CASE 1: Fully Hardened Baseline
+# Purpose: Verify that a properly secured pod produces NO critical or warning drift.
+# This is the false-positive control group.
+#
+# EXPECTED LAYER 1: 0 spec violations (all settings are compliant)
+# EXPECTED LAYER 2: 0 critical, 0 warning
+#   - capabilities: drop=ALL → expected=empty, runtime=empty → MATCH
+#   - seccomp: RuntimeDefault → runtime should apply it → MATCH
+#   - user: 1000 → runtime=1000 → MATCH
+#   - rootfs: readonly=true → runtime=true → MATCH
+#   - privesc: false → runtime noNewPrivs=true → MATCH
+#   - namespaces: all false → runtime all isolated → MATCH
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-1-fully-hardened
+  namespace: default
+  labels:
+    test-case: "1-fully-hardened"
+    expected-l1: "0-violations"
+    expected-l2-critical: "0"
+    expected-l2-warning: "0"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: secure-app
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]

@@ -1,0 +1,33 @@
+# TEST CASE 2: No Security Context
+# Purpose: Pod with NO securityContext at all. The runtime applies defaults.
+# This tests that the drift detector does NOT false-positive on missing spec fields.
+#
+# EXPECTED LAYER 1: 3 spec violations
+#   - seccomp_profile (medium): no seccomp declared
+#   - read_only_root (low): rootfs not read-only
+#   - root_container (high): no runAsNonRoot, image runs as root
+#     Note: root_container check may not fire since runAsUser is not explicitly 0
+#
+# EXPECTED LAYER 2: 0 critical, 0 warning
+#   - capabilities: expected=defaults(14), runtime=defaults(14) → exact match, 0 findings
+#   - seccomp: spec=none, runtime=none → both unconfined, 0 findings
+#   - user: spec=not set → no comparison done, 0 findings
+#   - rootfs: spec=false(default), runtime=false → match, 0 findings
+#   - privesc: spec=not set → possibly INFO if runtime sets noNewPrivs
+#   - namespaces: all default(false), all isolated → match, 0 findings
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-2-no-security
+  namespace: default
+  labels:
+    test-case: "2-no-security-context"
+    expected-l1: "2-3-violations"
+    expected-l2-critical: "0"
+    expected-l2-warning: "0"
+spec:
+  containers:
+  - name: bare-app
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    # No securityContext at all

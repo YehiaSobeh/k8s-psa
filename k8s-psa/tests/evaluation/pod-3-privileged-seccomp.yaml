@@ -1,0 +1,46 @@
+# TEST CASE 3: Privileged Container With Seccomp Declared
+# Purpose: THE KEY THESIS SCENARIO. Docker strips seccomp from privileged
+# containers, creating a CRITICAL enforcement gap that only Layer 2 detects.
+#
+# What happens: The spec declares seccompProfile: RuntimeDefault AND
+# privileged: true. Docker sees privileged=true and silently removes
+# the seccomp filter. Layer 1 sees the spec and thinks seccomp is applied.
+# Only Layer 2, by querying `docker inspect`, discovers the truth.
+#
+# EXPECTED LAYER 1: 1 spec violation
+#   - privileged_container (high): container runs in privileged mode
+#
+# EXPECTED LAYER 2:
+#   CRITICAL (1):
+#     - seccompProfile: spec=RuntimeDefault, runtime=unconfined (null)
+#       Docker STRIPS seccomp for privileged containers even when declared!
+#   WARNING (27):
+#     - capabilities: spec adds nothing, but privileged=true grants ALL 41 caps.
+#       Expected set = 14 defaults, actual = 41. So 27 unexpected non-default caps.
+#       Each one is a WARNING (unexpected_addition).
+#   INFO (0-1):
+#     - possible namespace INFO if hostNetwork behavior differs
+#
+# WHY THIS MATTERS: This is the enforcement verification gap.
+# No existing tool (Gatekeeper, Kyverno, Kubescape) would catch this
+# because they only read the spec and see "seccomp: RuntimeDefault" = OK.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-3-privileged-seccomp
+  namespace: default
+  labels:
+    test-case: "3-privileged-seccomp-drift"
+    expected-l1: "1-violation"
+    expected-l2-critical: "1"
+    expected-l2-warning: "27"
+spec:
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: priv-seccomp
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      privileged: true

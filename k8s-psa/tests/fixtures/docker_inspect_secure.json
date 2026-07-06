@@ -1,0 +1,29 @@
+{
+  "Id": "abc123docker_secure",
+  "Name": "/k8s_good-container_secure-pod_default_uid123_0",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Pid": 12345
+  },
+  "Config": {
+    "User": "1000:1000",
+    "Labels": {
+      "io.kubernetes.container.name": "good-container",
+      "io.kubernetes.pod.name": "secure-pod",
+      "io.kubernetes.pod.namespace": "default"
+    }
+  },
+  "HostConfig": {
+    "Privileged": false,
+    "CapAdd": null,
+    "CapDrop": ["ALL"],
+    "ReadonlyRootfs": true,
+    "SecurityOpt": ["no-new-privileges", "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\"}"],
+    "PidMode": "",
+    "NetworkMode": "none",
+    "IpcMode": "",
+    "MaskedPaths": ["/proc/asound", "/proc/acpi", "/proc/kcore"],
+    "ReadonlyPaths": ["/proc/bus", "/proc/fs", "/proc/irq"]
+  }
+}

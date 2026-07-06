@@ -1,0 +1,29 @@
+{
+  "Id": "xyz789docker_privileged",
+  "Name": "/k8s_bad-container_vulnerable-pod_default_uid456_0",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Pid": 54321
+  },
+  "Config": {
+    "User": "",
+    "Labels": {
+      "io.kubernetes.container.name": "bad-container",
+      "io.kubernetes.pod.name": "vulnerable-pod",
+      "io.kubernetes.pod.namespace": "default"
+    }
+  },
+  "HostConfig": {
+    "Privileged": true,
+    "CapAdd": ["SYS_ADMIN", "NET_RAW"],
+    "CapDrop": null,
+    "ReadonlyRootfs": false,
+    "SecurityOpt": [],
+    "PidMode": "host",
+    "NetworkMode": "host",
+    "IpcMode": "",
+    "MaskedPaths": [],
+    "ReadonlyPaths": []
+  }
+}

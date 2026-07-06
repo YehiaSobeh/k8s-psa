@@ -1,0 +1,40 @@
+# TEST CASE 4: Privileged Without Seccomp Declaration
+# Purpose: Control case for Test 3. Privileged + no seccomp declared.
+# Since the spec doesn't declare seccomp, the runtime running unconfined
+# is expected — NO seccomp drift should be detected.
+# However, the cap drift from privileged mode still appears.
+#
+# EXPECTED LAYER 1: 4 spec violations
+#   - privileged_container (high)
+#   - seccomp_profile (medium): no seccomp declared
+#   - read_only_root (low): rootfs not read-only
+#   - root_container (high): runs as UID 0
+#
+# EXPECTED LAYER 2:
+#   CRITICAL (0): No seccomp drift — spec says nothing, runtime says nothing → match
+#   WARNING (27): Same cap warnings as Test 3 — privileged grants ALL 41,
+#     spec only expects 14 defaults, so 27 unexpected capabilities.
+#   INFO (0-1): possible namespace INFO
+#
+# COMPARISON WITH TEST 3: Same pod but without seccomp declaration.
+# Test 3 has 1 CRITICAL (seccomp stripped), Test 4 has 0 CRITICAL.
+# This proves the drift detector correctly distinguishes between
+# "seccomp declared but stripped" vs "seccomp never declared".
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-4-privileged-no-seccomp
+  namespace: default
+  labels:
+    test-case: "4-privileged-no-seccomp"
+    expected-l1: "3-4-violations"
+    expected-l2-critical: "0"
+    expected-l2-warning: "27"
+spec:
+  containers:
+  - name: priv-no-seccomp
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      privileged: true
+      runAsUser: 0

@@ -1,0 +1,48 @@
+# TEST CASE 5: Partial Security Hardening
+# Purpose: Pod with SOME security settings but not fully hardened.
+# Tests that the drift detector correctly handles partial cap drops
+# and mixed secure/insecure settings.
+#
+# Config: drop NET_RAW + SYS_ADMIN, keep other defaults, seccomp set,
+# but rootfs is writable and allowPrivilegeEscalation not set.
+#
+# EXPECTED LAYER 1: 1 spec violation
+#   - read_only_root (low): rootfs not read-only
+#
+# EXPECTED LAYER 2:
+#   CRITICAL (0):
+#     - seccomp: declared RuntimeDefault → runtime should apply → match
+#     - user: declared 1000 → runtime 1000 → match
+#   WARNING (0):
+#     - caps: expected = defaults - NET_RAW - SYS_ADMIN = 12 caps
+#       runtime should have exactly those 12 → match, 0 warnings
+#   INFO (0-1):
+#     - allowPrivilegeEscalation not set → possibly INFO if runtime
+#       enforces noNewPrivs anyway
+#
+# This test verifies that partial cap drops work correctly and
+# the normalizer properly computes the expected capability set.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-5-partial-security
+  namespace: default
+  labels:
+    test-case: "5-partial-security"
+    expected-l1: "1-violation"
+    expected-l2-critical: "0"
+    expected-l2-warning: "0"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: partial-app
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    securityContext:
+      runAsUser: 1000
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop: ["NET_RAW", "SYS_ADMIN"]
