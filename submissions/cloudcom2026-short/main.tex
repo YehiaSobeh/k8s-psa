@@ -1,0 +1,267 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{balance}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\begin{document}
+
+\title{Bridging the Enforcement Verification Gap: Detecting Divergence Between Declared and Actual Security Posture in Kubernetes Containerized Environments}
+
+\author{
+\IEEEauthorblockN{Yehia Sobeh}
+\IEEEauthorblockA{Department of Cybersecurity\\
+Email: yehiasobehacm@gmail.com}
+}
+
+\maketitle
+
+\begin{abstract}
+Kubernetes secures containerized workloads through declarative security primitives, assuming that the container runtime faithfully translates declared intent into kernel-level enforcement. This paper identifies and addresses the \emph{enforcement verification gap}---the absence of tooling that verifies whether declared Kubernetes security contexts are actually enforced by the container runtime. We present k8s-psa, a DaemonSet-based auditor that continuously compares pod security specifications from the Kubernetes API against the actual runtime state obtained through the container runtime interface. In controlled experiments on a Minikube cluster with the Docker runtime, we evaluated the tool across seven test scenarios. The results reveal two findings: privileged containers that declare seccomp filtering have that filtering silently stripped by the Docker runtime---a genuine enforcement gap invisible to specification-only tools---and the Docker metadata interface omits the seccomp status of correctly protected non-privileged containers---an observability gap that produces false positives in naive runtime inspection. These findings demonstrate that the enforcement verification gap is real and that runtime inspection must account for the semantic differences between runtime metadata and actual kernel enforcement.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Kubernetes, container security, seccomp, runtime verification, enforcement drift, DevSecOps, security context
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Modern software systems increasingly adopt microservice architectures deployed as containerized workloads on Kubernetes. This shift introduces security challenges that traditional perimeter-based approaches cannot address: a larger attack surface distributed across potentially hundreds of containers, complex dependency chains that pull in third-party images, and dynamic runtime behavior in which containers are continuously created, scaled, and terminated~\cite{wong2023, devipriya2023}.
+
+Kubernetes addresses these challenges through declarative security primitives specified in pod security contexts. Admission controllers such as OPA Gatekeeper~\cite{gatekeeper2024} and Kyverno~\cite{kyverno2024} intercept pod creation requests and reject non-compliant specifications, while Pod Security Admission (PSA), which has been stable since Kubernetes v1.25~\cite{k8spsa2022}, enforces predefined security profiles at the namespace level.
+
+Despite their differences, these tools share a critical limitation: every one of them reads security properties from the Kubernetes API---that is, from the \emph{declared} pod specification. None of them verifies that the container runtime has correctly translated those declarations into kernel-level enforcement. This verification matters because the translation from a Kubernetes pod specification to actual process isolation passes through multiple layers: the kubelet translates the pod specification into a Container Runtime Interface (CRI) request, the container runtime generates an Open Container Initiative (OCI) runtime specification, and a low-level runtime configures Linux kernel primitives~\cite{k8sseccomp2024}. Each translation step may add defaults, override values, or fail to apply certain restrictions.
+
+This paper terms the resulting blind spot the \emph{enforcement verification gap} and presents k8s-psa,\footnote{Kubernetes Pod Security Auditor; not to be confused with the built-in Pod Security Admission (PSA) controller, which operates only on declared specifications.} a tool designed to detect divergences between declared security intent and actual runtime enforcement.
+
+\subsection{Research Questions}
+
+Three research questions guide this work. \textbf{RQ1:} To what extent does the actual security configuration of running containers diverge from the security properties declared in their Kubernetes pod specifications? \textbf{RQ2:} Can a lightweight, DaemonSet-based tool effectively detect such divergences with acceptable accuracy and performance overhead? \textbf{RQ3:} What categories of divergence occur in practice, and how should each category be classified from a security perspective?
+
+\subsection{Contributions}
+
+This work makes four contributions: (1)~a novel verification tool that closes the enforcement verification gap by systematically comparing declared Kubernetes security contexts against observed container runtime state; (2)~experimental evidence of genuine enforcement drift in privileged containers, where Docker silently strips declared seccomp profiles; (3)~the discovery of an observability gap in the Docker runtime metadata interface; and (4)~an open-source evaluation framework comprising 44 unit tests, 7 deployment-level test cases, and a real-time dashboard.
+
+\section{Background}
+
+\subsection{Kubernetes Security Architecture}
+
+Kubernetes enforces workload security through a layered model: pod specifications carry \texttt{securityContext} fields defining the intended posture~\cite{k8sseccomp2024}, the container runtime turns the kubelet's CRI request into an OCI runtime specification~\cite{ocispec2023} describing the exact kernel configuration, and a low-level runtime configures namespaces, cgroups, capabilities, and seccomp filters.
+
+\subsection{Pod Security Admission and Policy Engines}
+
+Pod Security Admission, which has been stable since Kubernetes v1.25~\cite{k8spsa2022}, enforces Pod Security Standards at admission time but does not monitor running workloads or verify runtime enforcement. Policy engines extend this admission-time model with periodic re-evaluation: OPA Gatekeeper~\cite{gatekeeper2024} audits cluster resources every 60 seconds, and Kyverno~\cite{kyverno2024} performs background scans every hour. In both cases, however, the audit reads the declared pod specification from the Kubernetes API, and neither tool queries the container runtime.
+
+At the opposite end of the stack, behavioral monitors such as Falco~\cite{falco2024} instrument the kernel via eBPF to detect anomalous system calls; they observe what containers \emph{do} at the kernel level, but do not verify whether the active security configuration matches what was declared.
+
+\section{Related Work}
+
+\subsection{Static Misconfiguration Detection}
+
+Research on Kubernetes security configuration has concentrated on the specification level. Rahman et al.~\cite{rahman2023} conducted a large-scale empirical study of 2,039 open-source Kubernetes manifests and explicitly identified runtime verification as future work. Building on the same specification-level view, Malul et al.~\cite{malul2024} proposed GenKubeSec for language-model-based YAML misconfiguration detection, and Sgan Cohen et al.~\cite{sgancohen2025} presented KubeGuard for RBAC and NetworkPolicy hardening; both works, which have not yet undergone peer review, likewise operate on declared configuration rather than enforced state.
+
+\subsection{Configuration Drift Detection}
+
+A second line of work targets configuration drift, exemplified by Kubediff~\cite{kubediff2020}, which reports differences between the running Kubernetes state and version-controlled manifests. Approaches in this category treat the Kubernetes API as the source of truth for the running state; none extends below the API to the container runtime layer.
+
+\subsection{The Identified Gap}
+
+Several results indicate that the layer below the API deserves scrutiny. Kermabon-Bobinnec et al.~\cite{prospec2022} demonstrated that temporal inconsistency between the orchestration and runtime layers can be exploited to bypass security policies, and Shamim et al.~\cite{shamim2025} concluded that security researchers should investigate dynamic configuration violation detection. Survey work by Wong et al.~\cite{wong2023} and Devi Priya et al.~\cite{devipriya2023} likewise identified runtime configuration drift detection as under-explored. To the best of our knowledge, however, no existing open-source tool systematically compares the security declarations held by the Kubernetes API against the state reported by the container runtime. The present work addresses precisely this gap.
+
+\section{Methodology}
+
+\subsection{System Architecture}
+
+k8s-psa operates as a Kubernetes DaemonSet, deploying one scanner pod per cluster node; this guarantees complete node coverage, co-locates each scanner with the local container runtime socket, and scales automatically as nodes join or leave the cluster. Each instance performs periodic two-layer security scans.
+
+\textbf{Layer~1 (Spec Check)} reads pod specifications from the Kubernetes API and checks them against eight configurable security policies (privileged mode, root user, host PID/network/IPC, seccomp profile, dangerous capabilities, and read-only root filesystem). This layer serves two purposes: it provides a baseline against which Layer~2 findings can be contextualized, and it flags pods that lack security declarations entirely---a case Layer~2 cannot detect, because the absence of a declaration leaves no intent to verify.
+
+\textbf{Layer~2 (Drift Detection)}---the novel contribution---compares declared specifications against actual runtime state by: (1)~extracting a \texttt{SpecSecurityState} from the Kubernetes API; (2)~querying the container runtime (\texttt{docker inspect} or \texttt{crictl inspect}) to build a \texttt{RuntimeSecurityState}; (3)~normalizing both states to account for expected divergences; and (4)~comparing the normalized states field by field across seven security dimensions.
+
+The comparison engine classifies each divergence as \textbf{CRITICAL} (a declared restriction is absent at runtime), \textbf{WARNING} (an undeclared capability is present), or \textbf{INFO} (the runtime is more restrictive than declared).
+
+\subsection{Capability Normalization}
+
+Naive comparison of declared and observed capability sets would flood the operator with false positives, because the container runtime adds 14 default Linux capabilities to every non-privileged container~\cite{dockerseccomp2024}. The normalizer therefore computes the \emph{expected} capability set from the pod specification: it starts with these documented defaults, removes the capabilities listed in \texttt{drop}, and adds those listed in \texttt{add}. Only deviations from this expected set generate findings.
+
+\subsection{Experimental Environment}
+
+Experiments were conducted on a single-node Minikube cluster (v1.35.0) on Ubuntu 22.04, running Kubernetes v1.32.0 with Docker 27.4.1. The scanner interval was 60 seconds. Seven test pods were designed to cover the spectrum of security configurations---fully hardened, no security context, privileged with and without a declared seccomp profile, partially secured, privilege-escalation-restricted, and host-namespace-sharing---and three scan cycles were captured per pod. The scanner additionally observed the Kubernetes control plane pods running in the cluster.
+
+\section{Results}
+
+\subsection{Detection Results Summary}
+
+Table~\ref{tab:results} presents the Layer~2 drift findings for each test pod. Layer~1 behaved as expected across all seven pods (e.g., zero violations for the fully hardened Pod~1 and six violations for the host-namespace Pod~7) and is not discussed further; the remainder of this section focuses on the Layer~2 findings that constitute the contribution of this work.
+
+\begin{table}[htbp]
+\caption{Layer~2 Drift Findings by Test Pod}
+\label{tab:results}
+\centering
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Test Pod} & \textbf{CRIT} & \textbf{WARN} & \textbf{INFO} & \textbf{Match} \\
+\midrule
+1. Fully Hardened   & 1*  & 0  & 0 & \S\ref{sec:obsgap} \\
+2. No Security Ctx  & 0   & 0  & 0 & Yes \\
+3. Priv + Seccomp   & 1   & 27 & 0 & Yes \\
+4. Priv, No Seccomp & 0   & 27 & 0 & Yes \\
+5. Partial Security & 1*  & 0  & 0 & \S\ref{sec:obsgap} \\
+6. No Privesc       & 1*  & 0  & 0 & \S\ref{sec:obsgap} \\
+7. Host Namespaces  & 0   & 0  & 2 & Yes \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize *Observability false positives analyzed in Section~\ref{sec:obsgap}.}
+\end{tabular}
+\end{table}
+
+\subsection{True Positive: Privileged Seccomp Stripping}
+
+The central finding concerns Test Pod~3, which declares both \texttt{privileged: true} and \texttt{seccompProfile.type: RuntimeDefault}. For such containers, the Docker runtime grants all 41 Linux capabilities and removes the seccomp filter entirely, even though seccomp filtering is explicitly declared. This behavior is documented in the Moby project issue tracker~\cite{moby41321}. The tool reported a CRITICAL \texttt{seccomp\_mismatch} finding: the specification declares seccomp type \texttt{RuntimeDefault}, but the runtime has no seccomp filter (unconfined).
+
+Test Pod~4 serves as the experimental control: it has the same runtime state as Pod~3 but no seccomp declaration, and it produced zero CRITICAL findings. The 27 WARNING-level capability findings are identical between Pods~3 and~4, reflecting the 27 capabilities that privileged mode grants beyond the 14 defaults---including \texttt{CAP\_SYS\_ADMIN}, \texttt{CAP\_NET\_ADMIN}, and \texttt{CAP\_SYS\_MODULE}.
+
+The security implication is direct: an operator who declares \texttt{RuntimeDefault} on a privileged container reasonably expects system call filtering to be active, and any specification-only tool reads the Kubernetes API and reports the container as filtered. Only by querying the container runtime does the silent removal become visible.
+
+\subsection{Observability Gap}
+\label{sec:obsgap}
+
+Test Pods~1, 5, and~6---all non-privileged and all declaring \texttt{RuntimeDefault}---unexpectedly produced CRITICAL seccomp findings. Investigation revealed that these are false positives caused by a documented but widely misunderstood behavior of the Docker metadata interface. When cri-dockerd translates \texttt{RuntimeDefault}, it passes no explicit \texttt{SecurityOpt} entry to Docker and instead relies on Docker's implicit default profile, which restricts several dozen sensitive system calls such as \texttt{mount}, \texttt{ptrace}, and \texttt{reboot}~\cite{dockerseccomp2024}. Because the implicit profile never appears in \texttt{docker inspect} output, a correctly protected container is indistinguishable---at the metadata level---from an unprotected one. The CIS Docker Benchmark (check 5.21) documents exactly this semantics: an empty \texttt{SecurityOpt} field indicates that the default profile is \emph{active}, not that seccomp is disabled~\cite{cisdocker2024, moric2025}. The four Kubernetes control plane pods observed during the evaluation exhibited the same phenomenon, confirming that the observability gap is systematic rather than an artifact of the test pod design.
+
+\subsection{Pod~3 vs.\ Pod~4: Controlled Comparison}
+
+Table~\ref{tab:comparison} presents the controlled comparison between Pod~3 and Pod~4, which isolates the seccomp declaration as the single independent variable.
+
+\begin{table}[htbp]
+\caption{Controlled Comparison: Pod~3 vs.\ Pod~4}
+\label{tab:comparison}
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Property} & \textbf{Pod 3} & \textbf{Pod 4} \\
+\midrule
+Spec: privileged     & true & true \\
+Spec: seccompProfile & RuntimeDefault & Not declared \\
+Runtime: capabilities & All 41 & All 41 \\
+Runtime: seccomp     & Unconfined & Unconfined \\
+L2 CRITICAL          & \textbf{1} & \textbf{0} \\
+L2 WARNING           & 27 & 27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both pods have identical runtime states; the only difference is the seccomp declaration. The drift detector flags Pod~3 and remains silent on Pod~4, demonstrating its \emph{specificity}: the tool distinguishes ``restriction declared but not enforced'' from ``restriction never declared.''
+
+\subsection{Performance Characteristics}
+
+Each scan cycle completed in approximately 3.1 seconds for 16 pods, well within the 60-second scan interval. The scanner consumed 64~MiB of memory and fewer than 100m CPU. The tool ships with 44 automated unit tests that execute in 0.2 seconds.
+
+\section{Discussion}
+
+\subsection{Answers to the Research Questions}
+
+The results answer all three research questions. Divergence between declared and enforced security is not hypothetical (RQ1): privileged containers with seccomp declarations exhibit a genuine enforcement gap, and privileged mode inflates the capability set by 27 capabilities beyond the declared expectation. A DaemonSet-based tool can detect such divergences with modest resources (RQ2): 64~MiB of memory, $<$100m CPU, and 3.1~s per cycle, with the controlled Pod~3/Pod~4 comparison showing that detection is specific rather than merely sensitive. Three categories of divergence emerged (RQ3): a \emph{genuine enforcement gap} (CRITICAL), \emph{capability inflation} (WARNING), and an \emph{observability gap} (false-positive CRITICAL).
+
+The gap is therefore real but nuanced. The enforcement gap creates a false sense of security: the declared control simply is not there. The observability gap demonstrates that runtime metadata is a lossy abstraction over kernel state---a definitive verdict requires reading the kernel's own enforcement status from \texttt{/proc/<pid>/status}, where a \texttt{Seccomp} value of~2 confirms that BPF filter mode is active~\cite{kep2413}.
+
+\subsection{Comparison with Existing Tools}
+
+To the best of our knowledge, no existing open-source tool performs the spec-versus-runtime comparison that k8s-psa implements: OPA Gatekeeper~\cite{gatekeeper2024} and Kyverno~\cite{kyverno2024} read only the Kubernetes API, Falco~\cite{falco2024} monitors kernel behavior without spec comparison, and Kubediff~\cite{kubediff2020} reports differences between the API state and git manifests. k8s-psa occupies the space between specification-level tools and kernel-level monitors.
+
+\subsection{Limitations}
+
+Four limitations bound the generality of these results: the experiments use Minikube with the Docker runtime, whereas production clusters predominantly use containerd (where the observability gap may not exist, since \texttt{crictl inspect} exposes the full OCI runtime specification); the seccomp verification relies on runtime metadata rather than kernel-level status; the evaluation was conducted on a single-node cluster; and seven test pods cover the primary security dimensions but not every configuration (e.g., init, sidecar, or ephemeral containers).
+
+\subsection{Future Work}
+
+Three directions merit investigation: extending the detector with \texttt{/proc/<pid>/status} verification, which would eliminate the observability gap entirely; deploying on containerd-based clusters (kind, GKE, EKS) to compare enforcement behavior across runtimes; and investigating whether mutating admission webhooks introduce additional enforcement gaps by modifying security contexts after user submission.
+
+\section{Conclusion}
+
+This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the Docker runtime---a genuine enforcement failure that is invisible to existing specification-only tools---and discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
+
+\balance
+
+\begin{thebibliography}{20}
+
+\bibitem{wong2023}
+A.~Y. Wong, E.~G. Chekole, M.~Ochoa, and J.~Zhou, ``On the security of containers: Threat modeling, attack analysis, and mitigation strategies,'' \emph{Comput. Secur.}, vol.~128, art.~103140, May 2023, doi: 10.1016/j.cose.2023.103140.
+
+\bibitem{devipriya2023}
+Devi~Priya~V~S, S.~C. Sethuraman, and M.~K. Khan, ``Container security: Precaution levels, mitigation strategies, and research perspectives,'' \emph{Comput. Secur.}, vol.~135, art.~103490, Dec. 2023, doi: 10.1016/j.cose.2023.103490.
+
+\bibitem{gatekeeper2024}
+Open Policy Agent, ``Gatekeeper audit,'' 2024. [Online]. Available: \url{https://open-policy-agent.github.io/gatekeeper/website/docs/audit/} (accessed Jul. 10, 2026).
+
+\bibitem{kyverno2024}
+Kyverno, ``Background scans,'' 2024. [Online]. Available: \url{https://kyverno.io/docs/policy-reports/background/} (accessed Jul. 10, 2026).
+
+\bibitem{k8spsa2022}
+Kubernetes, ``Kubernetes v1.25: Pod Security Admission controller in stable,'' Aug. 2022. [Online]. Available: \url{https://kubernetes.io/blog/2022/08/25/pod-security-admission-stable/} (accessed Jul. 10, 2026).
+
+\bibitem{k8sseccomp2024}
+Kubernetes, ``Restrict a container's syscalls with seccomp,'' 2024. [Online]. Available: \url{https://kubernetes.io/docs/tutorials/security/seccomp/} (accessed Jul. 10, 2026).
+
+\bibitem{ocispec2023}
+Open Container Initiative, ``OCI runtime specification,'' GitHub, 2023. [Online]. Available: \url{https://github.com/opencontainers/runtime-spec/blob/master/config.md} (accessed Jul. 10, 2026).
+
+\bibitem{falco2024}
+Sysdig, ``Container drift detection with Falco,'' 2024. [Online]. Available: \url{https://www.sysdig.com/blog/container-drift-detection-with-falco} (accessed Jul. 10, 2026).
+
+\bibitem{dockerseccomp2024}
+Docker, ``Seccomp security profiles for Docker,'' Docker Docs, 2024. [Online]. Available: \url{https://docs.docker.com/engine/security/seccomp/} (accessed Jul. 10, 2026).
+
+\bibitem{rahman2023}
+A.~Rahman, S.~I. Shamim, D.~B. Bose, and R.~Pandita, ``Security misconfigurations in open source Kubernetes manifests: An empirical study,'' \emph{ACM Trans. Softw. Eng. Methodol.}, vol.~32, no.~4, art.~99, pp.~1--36, May 2023, doi: 10.1145/3579639.
+
+\bibitem{malul2024}
+E.~Malul, Y.~Meidan, D.~Mimran, Y.~Elovici, and A.~Shabtai, ``GenKubeSec: LLM-based Kubernetes misconfiguration detection, localization, reasoning, and remediation,'' 2024, \emph{arXiv:2405.19954}, doi: 10.48550/arXiv.2405.19954.
+
+\bibitem{sgancohen2025}
+O.~Sgan~Cohen, E.~Malul, Y.~Meidan, D.~Mimran, Y.~Elovici, and A.~Shabtai, ``KubeGuard: LLM-assisted Kubernetes hardening via configuration files and runtime logs analysis,'' 2025, \emph{arXiv:2509.04191}, doi: 10.48550/arXiv.2509.04191.
+
+\bibitem{kubediff2020}
+Weaveworks, ``Kubediff,'' GitHub, 2020. [Online]. Available: \url{https://github.com/weaveworks/kubediff} (accessed Jul. 10, 2026).
+
+\bibitem{prospec2022}
+H.~Kermabon-Bobinnec \emph{et~al.}, ``ProSPEC: Proactive security policy enforcement for containers,'' in \emph{Proc. 12th ACM Conf. Data Appl. Security Privacy (CODASPY~'22)}, Baltimore, MD, USA, Apr. 2022, pp.~1--12, doi: 10.1145/3508398.3511515.
+
+\bibitem{shamim2025}
+S.~I. Shamim, H.~Hu, and A.~Rahman, ``Dynamic application security testing for Kubernetes deployment: An experience report from industry,'' in \emph{Proc. 33rd ACM Int. Conf. Found. Softw. Eng. (FSE~'25), Industry Papers Track}, Trondheim, Norway, Jun. 2025, doi: 10.1145/3696630.3728573.
+
+\bibitem{moby41321}
+Moby, ``Allow for custom seccomp profiles to be used in privileged containers,'' GitHub, Issue \#41321, 2020. [Online]. Available: \url{https://github.com/moby/moby/issues/41321} (accessed Jul. 10, 2026).
+
+\bibitem{cisdocker2024}
+Center for Internet Security, ``CIS Docker Benchmark,'' v1.7.0, 2024. [Online]. Available: \url{https://www.cisecurity.org/benchmark/docker} (accessed Jul. 10, 2026).
+
+\bibitem{moric2025}
+Z.~Morić, V.~Dakić, and T.~Čavala, ``Security hardening and compliance assessment of Kubernetes control plane and workloads,'' \emph{J.~Cybersecur. Priv.}, vol.~5, no.~2, art.~30, Jun. 2025, doi: 10.3390/jcp5020030.
+
+\bibitem{kep2413}
+S.~Grunert and M.~Patel, ``KEP-2413: Enable seccomp by default,'' Kubernetes Enhancement Proposal, 2023. [Online]. Available: \url{https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/2413-seccomp-by-default} (accessed Jul. 10, 2026).
+
+\end{thebibliography}
+
+\end{document}
