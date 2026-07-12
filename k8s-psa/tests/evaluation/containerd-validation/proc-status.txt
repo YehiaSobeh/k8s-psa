@@ -1,0 +1,9 @@
+CapBnd:	0000000000000000
+Seccomp:	2
+Seccomp_filters:	1
+CapBnd:	000001ffffffffff
+Seccomp:	0
+Seccomp_filters:	0
+CapBnd:	000001ffffffffff
+Seccomp:	0
+Seccomp_filters:	0

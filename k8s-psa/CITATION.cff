@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "k8s-psa: Kubernetes Pod Security Auditor"
+authors:
+  - family-names: Sobeh
+    given-names: Yehia
+    email: yehiasobehacm@gmail.com
+year: 2026
+license: MIT
+keywords:
+  - Kubernetes
+  - container security
+  - seccomp
+  - runtime verification
+  - enforcement drift
+  - DevSecOps
+preferred-citation:
+  type: article
+  title: "Bridging the Enforcement Verification Gap: Detecting Divergence Between Declared and Actual Security Posture in Kubernetes Containerized Environments"
+  authors:
+    - family-names: Sobeh
+      given-names: Yehia
+  year: 2026

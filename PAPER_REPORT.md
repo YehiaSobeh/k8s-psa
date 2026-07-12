@@ -1,6 +1,8 @@
 # Publication Report — "Bridging the Enforcement Verification Gap"
 
-**Date:** 2026-07-12 · **Branch:** `paper-publication`
+**Date:** 2026-07-12 (updated same day with cross-runtime validation) · **Branch:** `paper-publication`
+
+> **Update:** the containerd cross-runtime experiment (§5 step 4 of the plan) has now been **executed and written into all three paper versions**. Key outcome: the enforcement gap **generalizes to containerd** (kernel-confirmed via `/proc/<pid>/status`: `Seccomp: 0` for the privileged pod despite a declared profile), while the observability gap is **Docker-specific** (`crictl inspect` exposes the full OCI seccomp config). This removes the single biggest reviewer objection ("Docker-only"). Raw evidence: `k8s-psa/tests/evaluation/containerd-validation/`. The tool repo also now has `README.md`, `LICENSE` (MIT), and `CITATION.cff` — checklist item 2 is ready.
 
 This report covers: (1) the state of the paper, (2) every improvement made, (3) plagiarism check results, (4) where to publish (with an honest Q1 discussion), and (5) a step-by-step submission plan.
 
@@ -17,8 +19,9 @@ This report covers: (1) the state of the paper, (2) every improvement made, (3) 
 - Clean positioning between spec-level tools (Gatekeeper/Kyverno) and kernel monitors (Falco).
 
 **Weaknesses (what reviewers will attack)**
-- Single-node Minikube, Docker runtime only (production uses containerd), 7 test pods. This caps the paper at **short-paper/workshop tier as-is**; it is *not* Q1-journal scope yet.
-- Seccomp verification relies on runtime metadata, not kernel truth (`/proc/<pid>/status`) — acknowledged in limitations, which is the right way to handle it.
+- Single-node Minikube, 7 test pods. This caps the paper at **short-paper/workshop tier as-is**; it is *not* Q1-journal scope yet.
+- ~~Docker runtime only~~ **Fixed 2026-07-12:** cross-runtime validation on containerd 1.7.24 now in all three versions (enforcement gap generalizes; observability gap is Docker-specific).
+- ~~Seccomp verification relies on runtime metadata, not kernel truth~~ **Partially fixed:** the validation used `/proc/<pid>/status` as kernel ground truth; full integration into the scanner remains future work (stated honestly in limitations).
 - No comparison against Kubescape/kube-bench/Trivy Operator in the evaluation (only argued in prose).
 
 ---
@@ -110,8 +113,7 @@ Also possible: **IEEE SecDev 2027** (deadline ~Jan–Feb 2027, strong topical fi
 - Upload `submissions/cloudcom2026-short/main.pdf` (4pp, short-paper category, "Security, Privacy and Trust" topic).
 - CloudCom is single-blind (name stays on the paper). Notification: Sep 7, 2026.
 
-**Step 4 — Jul–Aug: run the containerd experiment** (biggest bang for effort, ~1–2 days):
-`minikube start --container-runtime=containerd`, redeploy the 7 pods, record whether (a) seccomp stripping still happens for privileged pods and (b) the observability gap disappears (crictl exposes the full OCI spec). *Either outcome strengthens the paper.* Add as "Cross-runtime validation" section to the master.
+**Step 4 — ✅ DONE (Jul 12): containerd experiment executed.** Results: (a) seccomp stripping **still happens** on containerd for privileged pods — kernel-confirmed (`Seccomp: 0`); the kubelet passes the profile through the CRI, containerd strips it; (b) the observability gap **disappears** — crictl exposes the full OCI spec. A "Cross-Runtime Validation on containerd" section is now in all three versions (with a results table in the master/ACM). Raw dumps: `k8s-psa/tests/evaluation/containerd-validation/`. Remaining for later: rerun all 7 pods + the scanner itself on containerd, and CRI-O.
 
 **Step 5 — when CCSW 2026 CFP opens: submit the ACM version** (updated with containerd results). Check whether the CFP requires anonymization — if yes, switch to `\documentclass[sigconf,anonymous]{acmart}` (comment is already in the file).
 

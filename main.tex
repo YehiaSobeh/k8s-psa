@@ -41,7 +41,7 @@ Email: yehiasobehacm@gmail.com}
 \maketitle
 
 \begin{abstract}
-Container orchestration platforms such as Kubernetes rely on declarative security primitives to enforce security boundaries around containerized workloads. A fundamental assumption underlies this model: that the container runtime faithfully translates declared security intent into kernel-level enforcement. This paper identifies and addresses the \emph{enforcement verification gap}---the absence of tooling that systematically verifies whether declared Kubernetes security contexts are actually enforced by the container runtime. We present k8s-psa, a DaemonSet-based auditor that continuously compares pod security specifications retrieved from the Kubernetes API against the actual runtime state obtained through the container runtime interface. Through controlled experiments on a Minikube cluster with the Docker runtime, we evaluated the tool across seven test scenarios spanning fully hardened, partially secured, privileged, and deliberately misconfigured workloads. Our results reveal two categories of findings. First, privileged containers that declare seccomp system call filtering have that filtering silently stripped by the Docker runtime---a genuine enforcement gap that is invisible to existing specification-only tools. Second, the Docker runtime metadata interface omits the seccomp enforcement status of non-privileged containers that are correctly protected---an observability gap that produces false positives in naive runtime inspection. These findings demonstrate that the enforcement verification gap is real, that it manifests differently across container configurations, and that runtime inspection must account for the semantic differences between runtime metadata and actual kernel enforcement.
+Container orchestration platforms such as Kubernetes rely on declarative security primitives to enforce security boundaries around containerized workloads. A fundamental assumption underlies this model: that the container runtime faithfully translates declared security intent into kernel-level enforcement. This paper identifies and addresses the \emph{enforcement verification gap}---the absence of tooling that systematically verifies whether declared Kubernetes security contexts are actually enforced by the container runtime. We present k8s-psa, a DaemonSet-based auditor that continuously compares pod security specifications retrieved from the Kubernetes API against the actual runtime state obtained through the container runtime interface. Through controlled experiments on a Minikube cluster with the Docker runtime, we evaluated the tool across seven test scenarios spanning fully hardened, partially secured, privileged, and deliberately misconfigured workloads. Our results reveal two categories of findings. First, privileged containers that declare seccomp system call filtering have that filtering silently stripped by the Docker runtime---a genuine enforcement gap that is invisible to existing specification-only tools. Second, the Docker runtime metadata interface omits the seccomp enforcement status of non-privileged containers that are correctly protected---an observability gap that produces false positives in naive runtime inspection. A kernel-verified cross-runtime validation on containerd shows that the enforcement gap generalizes---containerd likewise strips declared seccomp profiles from privileged containers---whereas the observability gap is Docker-specific. These findings demonstrate that the enforcement verification gap is real, that it manifests differently across container configurations and runtimes, and that runtime inspection must account for the semantic differences between runtime metadata and actual kernel enforcement.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -68,7 +68,7 @@ This paper terms the resulting blind spot the \emph{enforcement verification gap
 
 \subsection{Contributions}
 
-This work makes four contributions: (1)~a novel verification tool that closes the enforcement verification gap by systematically comparing declared Kubernetes security contexts against observed container runtime state; (2)~experimental evidence of genuine enforcement drift in privileged containers, where Docker silently strips declared seccomp profiles; (3)~the discovery of an observability gap in the Docker runtime metadata interface, which causes correctly protected containers to appear unprotected; and (4)~an open-source evaluation framework comprising 44 unit tests, 7 deployment-level test cases, and a real-time dashboard.
+This work makes four contributions: (1)~a novel verification tool that closes the enforcement verification gap by systematically comparing declared Kubernetes security contexts against observed container runtime state; (2)~experimental evidence of genuine enforcement drift in privileged containers, where both Docker and containerd silently strip declared seccomp profiles---confirmed at the kernel level via \texttt{/proc/<pid>/status}; (3)~the discovery of an observability gap in the Docker runtime metadata interface, which causes correctly protected containers to appear unprotected and which does not occur on containerd; and (4)~an open-source evaluation framework comprising 44 unit tests, 7 deployment-level test cases, and a real-time dashboard.
 
 \section{Background}
 
@@ -163,6 +163,8 @@ Naive comparison of declared and observed capability sets would flood the operat
 
 Experiments were conducted on a single-node Minikube cluster (v1.35.0) on Ubuntu 22.04, running Kubernetes v1.32.0 with Docker 27.4.1. The scanner interval was 60 seconds. Seven test pods were designed to cover the spectrum of security configurations---fully hardened, no security context, privileged with and without a declared seccomp profile, partially secured, privilege-escalation-restricted, and host-namespace-sharing---and three scan cycles were captured per pod. In addition to the seven purpose-built pods, the scanner observed the Kubernetes control plane pods running in the cluster, which serve as unplanned real-world subjects.
 
+To test whether the findings are Docker-specific, we additionally performed a targeted cross-runtime validation on a second cluster with the identical Kubernetes version (v1.32.0) but the containerd runtime (containerd 1.7.24, runc 1.2.2), redeploying the decisive test pods (1, 3, and~4) and verifying enforcement both through \texttt{crictl inspect} and directly against the kernel via \texttt{/proc/<pid>/status}.
+
 \section{Results}
 
 \subsection{Detection Results Summary}
@@ -241,6 +243,31 @@ L2 WARNING           & 27 & 27 \\
 
 Both pods have identical runtime states; the only difference is the seccomp declaration. The drift detector flags Pod~3 and remains silent on Pod~4, demonstrating its \emph{specificity}: the tool distinguishes ``restriction declared but not enforced'' from ``restriction never declared.''
 
+\subsection{Cross-Runtime Validation on containerd}
+\label{sec:crossruntime}
+
+Table~\ref{tab:crossruntime} summarizes the validation experiment on the containerd cluster, with the kernel's own seccomp status as ground truth.
+
+\begin{table}[htbp]
+\caption{Cross-Runtime Validation (containerd 1.7.24, runc 1.2.2)}
+\label{tab:crossruntime}
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Check} & \textbf{Pod 1} & \textbf{Pod 3} & \textbf{Pod 4} \\
+\midrule
+OCI spec: seccomp     & Present & Absent & Absent \\
+OCI spec: capabilities & 0 & 41 & 41 \\
+Kernel: \texttt{Seccomp} field & \textbf{2} (filter) & \textbf{0} (none) & \textbf{0} (none) \\
+Kernel: \texttt{CapBnd} bits  & 0 & 41 & 41 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two conclusions follow. First, \emph{the enforcement gap generalizes beyond Docker}: Pod~3's declared \texttt{RuntimeDefault} profile is passed by the kubelet through the CRI but stripped by containerd, and the kernel confirms that no filter is installed (\texttt{Seccomp:~0}). The paper's central finding is therefore not a Docker quirk---it holds on the runtime that dominates production clusters. Second, \emph{the observability gap is Docker-specific}: \texttt{crictl inspect} on containerd exposes the full OCI runtime specification, in which Pod~1's seccomp allowlist is explicitly visible and matches the kernel state (\texttt{Seccomp:~2}). The false positives observed on Docker would not occur on containerd.
+
+The validation also surfaced a further metadata-semantics trap: in the CRI protobuf JSON, a seccomp profile of type \texttt{RuntimeDefault} serializes as an empty object (enum value~0 is omitted), so naive inspection of the CRI configuration would misread a correctly declared profile as absent---reinforcing the paper's argument that verification tools must interpret runtime metadata semantics rather than take them at face value.
+
 \subsection{Performance Characteristics}
 
 Each scan cycle completed in approximately 3.1 seconds for 16 pods (0.7~s for Layer~1 and 2.4~s for Layer~2 across 18 containers), well within the 60-second scan interval. The scanner consumed 64~MiB of memory and fewer than 100m CPU, and the dashboard a further 32~MiB. The tool ships with 44 automated unit tests that execute in 0.2 seconds.
@@ -249,7 +276,7 @@ Each scan cycle completed in approximately 3.1 seconds for 16 pods (0.7~s for La
 
 \subsection{Answers to the Research Questions}
 
-\textbf{RQ1 (extent of divergence).} Divergence between declared and enforced security is not hypothetical. Privileged containers with seccomp declarations exhibit a genuine enforcement gap in which Docker silently removes the declared restriction, and privileged mode inflates the capability set by 27 capabilities beyond the declared expectation.
+\textbf{RQ1 (extent of divergence).} Divergence between declared and enforced security is not hypothetical. Privileged containers with seccomp declarations exhibit a genuine enforcement gap in which the runtime silently removes the declared restriction---on Docker and containerd alike---and privileged mode inflates the capability set by 27 capabilities beyond the declared expectation.
 
 \textbf{RQ2 (feasibility of lightweight detection).} A DaemonSet-based tool can detect such divergences with modest resources (64~MiB, $<$100m CPU, 3.1~s per cycle). The controlled Pod~3/Pod~4 comparison shows that detection is specific rather than merely sensitive; the observability false positives show that accuracy depends on correctly interpreting runtime metadata semantics.
 
@@ -257,7 +284,7 @@ Each scan cycle completed in approximately 3.1 seconds for 16 pods (0.7~s for La
 
 \subsection{The Gap Is Real but Nuanced}
 
-The results therefore confirm the enforcement verification gap while revealing that it has two distinct forms. The enforcement gap creates a false sense of security: the declared control simply is not there. The observability gap complicates verification tool development and demonstrates that runtime metadata is a lossy abstraction over kernel state---a definitive verdict requires reading the kernel's own enforcement status from \texttt{/proc/<pid>/status}, where a \texttt{Seccomp} value of~2 confirms that BPF filter mode is active~\cite{kep2413}.
+The results therefore confirm the enforcement verification gap while revealing that it has two distinct forms. The enforcement gap creates a false sense of security---the declared control simply is not there---and the cross-runtime validation shows it is systemic rather than an implementation quirk of one runtime. The observability gap, by contrast, is a property of the Docker metadata interface, and it demonstrates that runtime metadata is a lossy abstraction over kernel state. A definitive verdict requires reading the kernel's own enforcement status from \texttt{/proc/<pid>/status}, where a \texttt{Seccomp} value of~2 confirms that BPF filter mode is active~\cite{kep2413}; our validation experiment used exactly this check as ground truth.
 
 \subsection{Comparison with Existing Tools}
 
@@ -282,15 +309,15 @@ Kubediff       & Spec vs.\ git manifests & API vs.\ git \\
 
 \subsection{Limitations}
 
-Five limitations bound the generality of these results. First, the experiments use Minikube with the Docker runtime, whereas production clusters predominantly use containerd, where the observability gap may not exist because \texttt{crictl inspect} exposes the full OCI runtime specification. Second, the seccomp verification relies on runtime metadata rather than kernel-level status. Third, the evaluation was conducted on a single-node cluster. Fourth, the tool shells out to CLI commands rather than using native API client libraries. Fifth, seven test pods cover the primary security dimensions but not every configuration (e.g., init, sidecar, or ephemeral containers).
+Five limitations bound the generality of these results. First, the full tool evaluation ran on Docker; the containerd validation covered the three decisive pods rather than the complete scenario matrix, and CRI-O remains untested. Second, the tool's automated seccomp verification relies on runtime metadata rather than kernel-level status (the kernel check in Section~\ref{sec:crossruntime} was performed manually and is not yet integrated into the scanner). Third, the evaluation was conducted on single-node clusters. Fourth, the tool shells out to CLI commands rather than using native API client libraries. Fifth, seven test pods cover the primary security dimensions but not every configuration (e.g., init, sidecar, or ephemeral containers).
 
 \subsection{Future Work}
 
-Three directions merit investigation: extending the detector with \texttt{/proc/<pid>/status} verification, which would eliminate the observability gap entirely; deploying on containerd-based clusters (kind, GKE, EKS) to compare enforcement behavior across runtimes; and investigating whether mutating admission webhooks introduce additional enforcement gaps by modifying security contexts after user submission.
+Three directions merit investigation: integrating the \texttt{/proc/<pid>/status} kernel check---validated manually in this work---into the scanner itself, which would eliminate the observability gap entirely; extending the cross-runtime study to CRI-O and managed multi-node clusters (GKE, EKS) together with a prevalence study over real-world workloads; and investigating whether mutating admission webhooks introduce additional enforcement gaps by modifying security contexts after user submission.
 
 \section{Conclusion}
 
-This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the Docker runtime---a genuine enforcement failure that is invisible to all existing specification-only tools. We additionally discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
+This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the container runtime---on Docker and, as our kernel-verified cross-runtime validation shows, on containerd as well---a genuine enforcement failure that is invisible to all existing specification-only tools. We additionally discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected; on containerd this gap does not occur. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
 
 \balance
 
