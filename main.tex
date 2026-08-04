@@ -34,8 +34,21 @@
 
 \author{
 \IEEEauthorblockN{Yehia Sobeh}
-\IEEEauthorblockA{Department of Cybersecurity\\
-Email: yehiasobehacm@gmail.com}
+\IEEEauthorblockA{Innopolis University\\
+Innopolis, Russia\\
+yehiasobehacm@gmail.com}
+\and
+\IEEEauthorblockN{Ruslan Damindarov}
+\IEEEauthorblockA{Innopolis University\\
+Rubetek AI and Robotics Lab\\
+Innopolis, Russia\\
+r.damindarov@innopolis.university\\
+r.damindarov@rubetek.com}
+\and
+\IEEEauthorblockN{Awwal Ishiaku}
+\IEEEauthorblockA{Innopolis University\\
+Innopolis, Russia\\
+a.ishiaku@innopolis.university}
 }
 
 \maketitle
@@ -361,6 +374,10 @@ Three directions merit investigation: integrating the \texttt{/proc/<pid>/status
 \section{Conclusion}
 
 This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the container runtime, on Docker and, as our kernel-verified cross-runtime validation shows, on containerd as well. This is a real enforcement failure that is invisible to all existing specification-only tools. We additionally discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected; on containerd this gap does not occur. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
+
+\section*{Acknowledgment}
+
+The authors gratefully acknowledge the support of the Laboratory for Robotics and Artificial Intelligence and the Institute of Information Security at Innopolis University, together with the Rubetek AI and Robotics Lab.
 
 \balance
 
