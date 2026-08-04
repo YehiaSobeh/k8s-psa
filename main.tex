@@ -12,7 +12,7 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds}
 
 \lstset{
   basicstyle=\ttfamily\footnotesize,
@@ -68,7 +68,7 @@ This paper terms the resulting blind spot the \emph{enforcement verification gap
 
 \subsection{Contributions}
 
-This work makes four contributions: (1)~a novel verification tool that closes the enforcement verification gap by systematically comparing declared Kubernetes security contexts against observed container runtime state; (2)~experimental evidence of genuine enforcement drift in privileged containers, where both Docker and containerd silently strip declared seccomp profiles, confirmed at the kernel level via \texttt{/proc/<pid>/status}; (3)~the discovery of an observability gap in the Docker runtime metadata interface, which causes correctly protected containers to appear unprotected and which does not occur on containerd; and (4)~an open-source evaluation framework comprising 44 unit tests, 7 deployment-level test cases, and a real-time dashboard.
+This work makes four contributions: (1)~a novel verification tool that closes the enforcement verification gap by systematically comparing declared Kubernetes security contexts against observed container runtime state; (2)~experimental evidence of enforcement drift in privileged containers, where both Docker and containerd strip declared seccomp profiles without warning, confirmed at the kernel level via \texttt{/proc/<pid>/status}; (3)~the discovery of an observability gap in the Docker runtime metadata interface, which causes correctly protected containers to appear unprotected and which does not occur on containerd; and (4)~an open-source evaluation framework comprising 44 unit tests, 7 deployment-level test cases, and a real-time dashboard.
 
 \section{Background}
 
@@ -110,11 +110,13 @@ k8s-psa operates as a Kubernetes DaemonSet~\cite{k8sdaemonset2024}, deploying on
 
 The comparison engine classifies each divergence as \textbf{CRITICAL} (a declared restriction is absent at runtime), \textbf{WARNING} (an undeclared capability is present), or \textbf{INFO} (the runtime is more restrictive than declared).
 
+\textbf{Reporting pipeline.} Both layers emit their findings into a common reporting stage. An AlertManager consolidates the \texttt{spec\_violations} produced by Layer~1 and the \texttt{drift\_findings} produced by Layer~2, appends each record as one line of newline-delimited JSON to \texttt{findings.jsonl}, and exposes a lightweight dashboard over HTTP (port~8080) that renders the current findings for operators. This reporting stage forms the lower portion of Fig.~\ref{fig:pipeline}.
+
 \begin{figure}[htbp]
 \centering
 \resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
-    node distance = 0.45cm and 0.9cm,
+    node distance = 0.5cm and 0.9cm,
     block/.style = {
       draw, thick, rounded corners,
       text width=2.9cm, align=center,
@@ -122,42 +124,54 @@ The comparison engine classifies each divergence as \textbf{CRITICAL} (a declare
       font=\sffamily\footnotesize
     },
     arrow/.style = {->, >=Stealth, thick},
+    grp/.style = {draw, dashed, rounded corners, inner sep=7pt},
 ]
+% data sources
 \node[block, dashed, fill=gray!8] (api) {Kubernetes API\\\tiny(declared pod specifications)};
-\node[block, dashed, fill=gray!8, right=1.6cm of api] (rt) {Container runtime\\\tiny(Docker / containerd)};
+\node[block, dashed, fill=gray!8, right=1.7cm of api] (rt) {Container runtime\\\tiny(Docker / containerd)};
 
-\node[block, fill=blue!5, below=of api] (pod)   {PodScanner\\\tiny(spec collector)};
-\node[block, fill=blue!12, below=of pod] (pol)   {Policy Engine\\\tiny(8 configurable checks)};
-\node[block, fill=blue!6, below=of pol] (spec)   {spec\_violations\\\tiny(missing declarations)};
+% shared spec collector
+\node[block, fill=blue!5, below=of api] (pod) {PodScanner\\\tiny(spec collector, feeds both layers)};
 
-\node[block, fill=orange!12, below=of rt] (insp)  {RuntimeInspector\\\tiny(docker inspect / crictl)};
-\node[block, fill=orange!18, below=of insp] (drift)      {Drift Detector\\\tiny(normalize, then compare\\\tiny spec vs.\ runtime state)};
-\node[block, fill=orange!8,  below=of drift] (find)      {drift\_findings\\\tiny(CRITICAL / WARNING / INFO)};
+% Layer 1 path
+\node[block, fill=blue!12, below=0.95cm of pod] (pol) {Policy Engine\\\tiny(8 configurable checks)};
+\node[block, fill=blue!6, below=of pol] (spec) {spec\_violations\\\tiny(missing declarations)};
 
-\node[block, fill=green!10,
-      below=1.0cm of spec.south -| find.south] (alert) {AlertManager};
-\node[block, fill=cyan!10, below=of alert] (ndjson) {\texttt{findings.jsonl}};
-\node[block, fill=cyan!5,  below=of ndjson] (dash)  {Dashboard\\\tiny HTTP :8080};
+% Layer 2 path (RuntimeInspector aligned with the Policy Engine row)
+\node[block, fill=orange!12, below=1.5cm of rt] (insp) {RuntimeInspector\\\tiny(docker inspect / crictl)};
+\node[block, fill=orange!18, below=of insp] (drift) {Drift Detector\\\tiny(normalize, then compare\\\tiny spec vs.\ runtime state)};
+\node[block, fill=orange!8, below=of drift] (find) {drift\_findings\\\tiny(CRITICAL / WARNING / INFO)};
 
-\draw[arrow] (api)  -- (pod);
-\draw[arrow] (rt)   -- (insp);
-\draw[arrow] (pod)  -- (pol);
-\draw[arrow] (pol)  -- (spec);
+% reporting pipeline
+\node[block, fill=green!10, below=1.25cm of find.south] (alert) {AlertManager\\\tiny(consolidates both streams)};
+\node[block, fill=cyan!10, below=of alert] (ndjson) {\texttt{findings.jsonl}\\\tiny(NDJSON records)};
+\node[block, fill=cyan!5, below=of ndjson] (dash) {Dashboard\\\tiny(HTTP :8080)};
+
+% arrows
+\draw[arrow] (api) -- (pod);
+\draw[arrow] (rt) -- (insp);
+\draw[arrow] (pod) -- (pol);
+\draw[arrow] (pol) -- (spec);
 \draw[arrow] (insp) -- node[right, font=\tiny] {runtime state} (drift);
-\draw[arrow] (pod.east) -- ++(0.35,0) |- node[pos=0.75, above, font=\tiny] {declared state} (drift.west);
-\draw[arrow] (drift)-- (find);
-\draw[arrow] (spec.south) -- ++(0,-0.3) -| (alert.north);
-\draw[arrow] (find.south) -- ++(0,-0.3) -| (alert.north);
-\draw[arrow] (alert)  -- (ndjson);
+\draw[arrow] (pod.east) -- ++(0.30,0) |- node[pos=0.72, above, font=\tiny] {declared state} (drift.west);
+\draw[arrow] (drift) -- (find);
+\draw[arrow] (spec.south) |- (alert.west);
+\draw[arrow] (find.south) -- (alert.north);
+\draw[arrow] (alert) -- (ndjson);
 \draw[arrow] (ndjson) -- (dash);
 
-\node[font=\sffamily\bfseries\small, blue!70!black,
-      above=0.08cm of pod.north west, anchor=south west] {Layer 1};
-\node[font=\sffamily\bfseries\small, orange!70!black,
-      above=0.08cm of insp.north west, anchor=south west] {Layer 2};
+% grouping of the two scan layers and the reporting stage
+\begin{scope}[on background layer]
+  \node[grp, draw=blue!45,        fill=blue!3,   fit=(pol)(spec)]          (l1box) {};
+  \node[grp, draw=orange!60,      fill=orange!4, fit=(insp)(drift)(find)]  (l2box) {};
+  \node[grp, draw=green!45!black, fill=green!3,  fit=(alert)(ndjson)(dash)](rpbox) {};
+\end{scope}
+\node[font=\sffamily\bfseries\small, blue!70!black,   anchor=south west] at (l1box.north west) {Layer 1};
+\node[font=\sffamily\bfseries\small, orange!70!black, anchor=south west] at (l2box.north west) {Layer 2};
+\node[font=\sffamily\bfseries\small, green!45!black,  anchor=south west] at (rpbox.north west) {Reporting};
 \end{tikzpicture}%
 }
-\caption{Two-layer scanning pipeline of k8s-psa. The PodScanner collects declared specifications from the Kubernetes API and feeds both layers. Layer~1 validates the specifications against eight policies and reports missing declarations. Layer~2 (the novel contribution) additionally obtains the actual runtime state through the RuntimeInspector, normalizes both states, and compares them field by field to detect divergence between declared and enforced security. Both finding streams feed the AlertManager, which produces NDJSON records consumed by the dashboard.}
+\caption{Two-layer scanning pipeline of k8s-psa. The PodScanner is a shared spec collector: it reads declared specifications from the Kubernetes API and feeds both layers. Layer~1 validates those specifications against eight policies and reports missing declarations. Layer~2, the novel contribution, additionally obtains the actual runtime state through the RuntimeInspector, normalizes both states, and compares them field by field to detect divergence between declared and enforced security. The AlertManager then consolidates the two finding streams, appends them as NDJSON records to \texttt{findings.jsonl}, and the dashboard serves those records over HTTP for inspection.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -168,7 +182,29 @@ Naive comparison of declared and observed capability sets would flood the operat
 \subsection{Experimental Environment}
 \label{sec:env}
 
-Experiments were conducted on a single-node Minikube cluster (v1.35.0) running Kubernetes v1.32.0 with Docker 27.4.1. The host machine was a laptop with an Intel Core i5-1135G7 processor (4 cores, 8 threads, up to 4.2\,GHz) and 8\,GB of RAM, running Ubuntu 22.04.5 LTS with Linux kernel 6.8; the Minikube node was allocated 2 vCPUs and 2200\,MB of memory through the Docker driver. The scanner interval was 60 seconds. Seven test pods were designed to cover the spectrum of security configurations: fully hardened, no security context, privileged with and without a declared seccomp profile, partially secured, privilege-escalation-restricted, and host-namespace-sharing. Three scan cycles were captured per pod. In addition to the seven purpose-built pods, the scanner observed the Kubernetes control plane pods running in the cluster, which serve as unplanned real-world subjects.
+Experiments were conducted on a single-node Minikube cluster (v1.35.0) running Kubernetes v1.32.0 with Docker 27.4.1. The host machine was a laptop with an Intel Core i5-1135G7 processor (4 cores, 8 threads, up to 4.2\,GHz) and 8\,GB of RAM, running Ubuntu 22.04.5 LTS with Linux kernel 6.8; the Minikube node was allocated 2 vCPUs and 2200\,MB of memory through the Docker driver. The scanner interval was 60 seconds. Seven test pods were designed to cover the spectrum of security configurations: fully hardened, no security context, privileged with and without a declared seccomp profile, partially secured, one with privilege escalation restricted, and one sharing host namespaces. Three scan cycles were captured per pod. In addition to the seven purpose-built pods, the scanner observed the Kubernetes control plane pods running in the cluster, which serve as unplanned real-world subjects. Table~\ref{tab:specs} summarizes the hardware and software configuration.
+
+\begin{table}[htbp]
+\caption{Experimental System Specifications}
+\label{tab:specs}
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Specification} \\
+\midrule
+Host CPU        & Intel Core i5-1135G7 (4C/8T, up to 4.2\,GHz) \\
+Host memory     & 8\,GB \\
+Host OS         & Ubuntu 22.04.5 LTS \\
+Host kernel     & Linux 6.8 \\
+Minikube        & v1.35.0 (Docker driver) \\
+Node resources  & 2 vCPUs, 2200\,MB memory \\
+Kubernetes      & v1.32.0 \\
+Primary runtime & Docker 27.4.1 \\
+Cross-runtime   & containerd 1.7.24, runc 1.2.2 \\
+Scan interval   & 60\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 To test whether the findings are Docker-specific, we additionally performed a targeted cross-runtime validation on a second cluster on the same host, with the identical Kubernetes version (v1.32.0) and resource allocation but the containerd runtime (containerd 1.7.24, runc 1.2.2), redeploying the decisive test pods (1, 3, and~4) and verifying enforcement both through \texttt{crictl inspect} and directly against the kernel via \texttt{/proc/<pid>/status}.
 
@@ -217,7 +253,7 @@ The central finding concerns Test Pod~3, which declares both \texttt{privileged:
 
 Test Pod~4 serves as the experimental control: it has the same runtime state as Pod~3 but no seccomp declaration, and it produced zero CRITICAL findings. The 27 WARNING-level capability findings are identical between Pods~3 and~4, reflecting the 27 capabilities that privileged mode grants beyond the 14 defaults, including \texttt{CAP\_SYS\_ADMIN}, \texttt{CAP\_NET\_ADMIN}, and \texttt{CAP\_SYS\_MODULE}.
 
-The security implication is direct. An operator who declares \texttt{RuntimeDefault} on a privileged container reasonably expects system call filtering to be active. Any specification-only tool reads the Kubernetes API, sees \texttt{RuntimeDefault}, and reports the container as filtered. Only by querying the container runtime does the silent removal become visible.
+The security implication is direct. An operator who declares \texttt{RuntimeDefault} on a privileged container reasonably expects system call filtering to be active. Any specification-only tool reads the Kubernetes API, sees \texttt{RuntimeDefault}, and reports the container as filtered. Only by querying the container runtime does this removal become visible.
 
 \subsection{Observability Gap}
 \label{sec:obsgap}
@@ -277,13 +313,13 @@ The validation also surfaced a further metadata-semantics trap: in the CRI proto
 
 \subsection{Performance Characteristics}
 
-On the experimental system described in Section~\ref{sec:env} (Intel Core i5-1135G7, 8\,GB RAM, Minikube node limited to 2 vCPUs and 2200\,MB), each scan cycle completed in approximately 3.1 seconds for 16 pods (0.7~s for Layer~1 and 2.4~s for Layer~2 across 18 containers), well within the 60-second scan interval. The scanner consumed 64~MiB of memory and fewer than 100m CPU, and the dashboard a further 32~MiB. The tool ships with 44 automated unit tests that execute in 0.2 seconds.
+On the experimental system detailed in Section~\ref{sec:env} and Table~\ref{tab:specs} (Intel Core i5-1135G7, 8\,GB RAM, Minikube node limited to 2 vCPUs and 2200\,MB), each scan cycle completed in approximately 3.1 seconds for 16 pods (0.7~s for Layer~1 and 2.4~s for Layer~2 across 18 containers), well within the 60-second scan interval. The scanner consumed 64~MiB of memory and fewer than 100m CPU, and the dashboard a further 32~MiB. The tool ships with 44 automated unit tests that execute in 0.2 seconds.
 
 \section{Discussion}
 
 \subsection{Answers to the Research Questions}
 
-\textbf{RQ1 (extent of divergence).} Divergence between declared and enforced security is not hypothetical. Privileged containers with seccomp declarations exhibit a genuine enforcement gap in which the runtime silently removes the declared restriction, on Docker and containerd alike, and privileged mode inflates the capability set by 27 capabilities beyond the declared expectation.
+\textbf{RQ1 (extent of divergence).} Divergence between declared and enforced security is not hypothetical. Privileged containers with seccomp declarations exhibit a real enforcement gap in which the runtime drops the declared restriction unannounced, on Docker and containerd alike, and privileged mode inflates the capability set by 27 capabilities beyond the declared expectation.
 
 \textbf{RQ2 (feasibility of lightweight detection).} A DaemonSet-based tool can detect such divergences with modest resources (64~MiB, $<$100m CPU, 3.1~s per cycle). The controlled Pod~3/Pod~4 comparison shows that detection is specific rather than merely sensitive; the observability false positives show that accuracy depends on correctly interpreting runtime metadata semantics.
 
@@ -324,7 +360,7 @@ Three directions merit investigation: integrating the \texttt{/proc/<pid>/status
 
 \section{Conclusion}
 
-This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the container runtime, on Docker and, as our kernel-verified cross-runtime validation shows, on containerd as well. This is a genuine enforcement failure that is invisible to all existing specification-only tools. We additionally discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected; on containerd this gap does not occur. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
+This paper identified and addressed the enforcement verification gap in Kubernetes security. Through controlled experiments, we demonstrated that privileged containers declaring seccomp filtering had that filtering silently removed by the container runtime, on Docker and, as our kernel-verified cross-runtime validation shows, on containerd as well. This is a real enforcement failure that is invisible to all existing specification-only tools. We additionally discovered an observability gap in Docker's metadata interface that makes correctly protected containers appear unprotected; on containerd this gap does not occur. The tool, its evaluation framework, and its real-time dashboard are provided as open-source contributions.
 
 \balance
 
