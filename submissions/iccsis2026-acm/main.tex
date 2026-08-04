@@ -139,7 +139,7 @@ Several results indicate that the layer below the API deserves scrutiny. Kermabo
 
 \subsection{System Architecture}
 
-k8s-psa operates as a Kubernetes DaemonSet~\cite{k8sdaemonset2024}, deploying one scanner pod per cluster node. This deployment model guarantees complete node coverage, co-locates each scanner with the local container runtime socket, and scales automatically as nodes join or leave the cluster. Each instance performs periodic two-layer security scans; Fig.~\ref{fig:pipeline} shows the scanning pipeline.
+k8s-psa operates as a Kubernetes DaemonSet~\cite{k8sdaemonset2024}, deploying one scanner pod per cluster node. This deployment model guarantees complete node coverage, co-locates each scanner with the local container runtime socket, and scales automatically as nodes join or leave the cluster. Each instance performs periodic two-layer security scans; Figure~\ref{fig:pipeline} shows the scanning pipeline.
 
 \textbf{Layer~1 (Spec Check)} reads pod specifications from the Kubernetes API and checks them against eight configurable security policies (privileged mode, root user, host PID/network/IPC, seccomp profile, dangerous capabilities, and read-only root filesystem). This layer is functionally equivalent to existing policy engines and serves two purposes: it provides a baseline against which Layer~2 findings can be contextualized, and it flags pods that lack security declarations entirely, a case Layer~2 cannot detect, because the absence of a declaration leaves no intent to verify.
 
@@ -147,7 +147,7 @@ k8s-psa operates as a Kubernetes DaemonSet~\cite{k8sdaemonset2024}, deploying on
 
 The comparison engine classifies each divergence as \textbf{CRITICAL} (a declared restriction is absent at runtime), \textbf{WARNING} (an undeclared capability is present), or \textbf{INFO} (the runtime is more restrictive than declared).
 
-\textbf{Reporting pipeline.} Both layers emit their findings into a common reporting stage. An AlertManager consolidates the \texttt{spec\_violations} produced by Layer~1 and the \texttt{drift\_findings} produced by Layer~2, appends each record as one line of newline-delimited JSON to \texttt{findings.jsonl}, and exposes a lightweight dashboard over HTTP (port~8080) that renders the current findings for operators. This reporting stage forms the lower portion of Fig.~\ref{fig:pipeline}.
+\textbf{Reporting pipeline.} Both layers emit their findings into a common reporting stage. An AlertManager consolidates the \texttt{spec\_violations} produced by Layer~1 and the \texttt{drift\_findings} produced by Layer~2, appends each record as one line of newline-delimited JSON to \texttt{findings.jsonl}, and exposes a lightweight dashboard over HTTP (port~8080) that renders the current findings for operators. This reporting stage forms the lower portion of Figure~\ref{fig:pipeline}.
 
 \begin{figure}[htbp]
 \centering
@@ -222,7 +222,7 @@ Naive comparison of declared and observed capability sets would flood the operat
 Experiments were conducted on a single-node Minikube cluster (v1.35.0) running Kubernetes v1.32.0 with Docker 27.4.1. The host machine was a laptop with an Intel Core i5-1135G7 processor (4 cores, 8 threads, up to 4.2\,GHz) and 8\,GB of RAM, running Ubuntu 22.04.5 LTS with Linux kernel 6.8; the Minikube node was allocated 2 vCPUs and 2200\,MB of memory through the Docker driver. The scanner interval was 60 seconds. Seven test pods were designed to cover the spectrum of security configurations: fully hardened, no security context, privileged with and without a declared seccomp profile, partially secured, one with privilege escalation restricted, and one sharing host namespaces. Three scan cycles were captured per pod. In addition to the seven purpose-built pods, the scanner observed the Kubernetes control plane pods running in the cluster, which serve as unplanned real-world subjects. Table~\ref{tab:specs} summarizes the hardware and software configuration.
 
 \begin{table}[htbp]
-\caption{Experimental System Specifications}
+\caption{Experimental System Specifications.}
 \label{tab:specs}
 \centering
 \begin{tabular}{ll}
@@ -252,7 +252,7 @@ To test whether the findings are Docker-specific, we additionally performed a ta
 Table~\ref{tab:results} presents the Layer~2 drift findings for each test pod. Layer~1 behaved as expected across all seven pods (e.g., zero violations for the fully hardened Pod~1 and six violations for the host-namespace Pod~7) and is not discussed further; the remainder of this section focuses on the Layer~2 findings that constitute the contribution of this work.
 
 \begin{table}[htbp]
-\caption{Layer~2 Drift Findings by Test Pod}
+\caption{Layer~2 Drift Findings by Test Pod.}
 \label{tab:results}
 \centering
 \begin{tabular}{lcccc}
@@ -304,7 +304,7 @@ The Kubernetes control plane pods observed during the evaluation (etcd, kube-api
 Table~\ref{tab:comparison} presents the controlled comparison between Pod~3 and Pod~4, which isolates the seccomp declaration as the single independent variable.
 
 \begin{table}[htbp]
-\caption{Controlled Comparison: Pod~3 vs.\ Pod~4}
+\caption{Controlled Comparison: Pod~3 vs.\ Pod~4.}
 \label{tab:comparison}
 \centering
 \begin{tabular}{lcc}
@@ -329,7 +329,7 @@ Both pods have identical runtime states; the only difference is the seccomp decl
 Table~\ref{tab:crossruntime} summarizes the validation experiment on the containerd cluster, with the kernel's own seccomp status as ground truth.
 
 \begin{table}[htbp]
-\caption{Cross-Runtime Validation (containerd 1.7.24, runc 1.2.2)}
+\caption{Cross-Runtime Validation (containerd 1.7.24, runc 1.2.2).}
 \label{tab:crossruntime}
 \centering
 \begin{tabular}{lccc}
@@ -371,7 +371,7 @@ The results therefore confirm the enforcement verification gap while revealing t
 Table~\ref{tab:tools} positions k8s-psa in the existing tool landscape. To the best of our knowledge, no existing open-source tool performs the spec-versus-runtime comparison that k8s-psa implements: OPA Gatekeeper~\cite{gatekeeper2024} and Kyverno~\cite{kyverno2024} read only the Kubernetes API, Falco~\cite{falco2024} monitors kernel behavior without spec comparison, and Kubediff~\cite{kubediff2020} reports differences between the API state and git manifests. k8s-psa occupies the space between specification-level tools and kernel-level monitors.
 
 \begin{table}[htbp]
-\caption{Positioning of k8s-psa Among Existing Tools}
+\caption{Positioning of k8s-psa Among Existing Tools.}
 \label{tab:tools}
 \centering
 \begin{tabular}{lll}
