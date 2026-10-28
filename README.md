@@ -1,5 +1,12 @@
 # k8s-psa — Kubernetes Pod Security Auditor
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue) ![Kubernetes 1.25+](https://img.shields.io/badge/kubernetes-1.25%2B-326ce5) ![Tests](https://img.shields.io/badge/tests-44%20passing-brightgreen)
+
+**Demo video:** https://youtu.be/SyWH9YpJL2Y
+
+> Status: Bachelor's thesis at Innopolis University, defended June 2026 (supervisor: Prof. Kirill Saltanov). Conference paper in preparation.
+
+
 **k8s-psa** detects the *enforcement verification gap* in Kubernetes: the blind spot between what a pod's `securityContext` **declares** and what the container runtime **actually enforces**. Every existing policy tool (OPA Gatekeeper, Kyverno, Pod Security Admission) reads only the declared specification from the Kubernetes API; none of them verifies that the runtime translated those declarations into kernel-level enforcement. k8s-psa does.
 
 > Not to be confused with Kubernetes' built-in **Pod Security Admission (PSA)** controller, which validates declared manifests at admission time only.
@@ -19,6 +26,9 @@ k8s-psa runs as a **DaemonSet** (one scanner per node) and performs a two-layer 
 | **Layer 2 — Drift Detection** | Kubernetes API **vs.** container runtime (`docker inspect` / `crictl inspect`) | Declared restrictions absent at runtime (**CRITICAL**), undeclared capabilities present (**WARNING**), runtime stricter than declared (**INFO**) |
 
 A capability normalizer computes the *expected* runtime capability set (14 runtime defaults ± `add`/`drop` lists) so that only genuine deviations produce findings. Results are written as NDJSON and served by a real-time dashboard (Chart.js, port 8080).
+
+![k8s-psa dashboard](docs/dashboard.png)
+*[ADD SCREENSHOT: docs/dashboard.png, the live dashboard showing Layer 1 and Layer 2 findings for the 7 evaluation pods]*
 
 ```
 src/
@@ -52,6 +62,30 @@ python -m pytest tests/          # 44 unit tests, ~0.2 s
 ```
 
 Measured footprint: ~3.1 s per scan cycle (16 pods), 64 MiB RAM, <100m CPU.
+
+### Cross-runtime validation (containerd)
+
+The two findings were replicated on containerd 1.7.24 with kernel-level ground truth (`/proc/<pid>/status`). The enforcement gap generalizes: containerd also strips the declared seccomp profile from privileged containers (`Seccomp: 0`). The observability gap is Docker-specific: `crictl inspect` on containerd exposes the full OCI seccomp config. Raw evidence and procedure: [`tests/evaluation/containerd-validation/`](tests/evaluation/containerd-validation/RESULTS.md).
+
+## Repository layout
+
+```
+src/                      scanner (see module list above)
+dashboard/                Flask + Chart.js live dashboard
+deployments/all-in-one.yaml   namespace, RBAC, ConfigMap, DaemonSet, dashboard Service
+policies/default.yaml     Layer 1 policy set (8 checks)
+tests/                    44 unit tests, fixtures (docker/crictl inspect dumps), 7 evaluation pods, raw results
+docs/                     screenshots
+deploy.sh                 build images, load into Minikube, apply manifests
+analyze.py                summarise evaluation NDJSON into tables
+```
+
+## What I learned
+
+- Runtime metadata is not kernel state. `docker inspect` showing an empty `SecurityOpt` can mean "unprotected" or "protected by the implicit default"; only `/proc/<pid>/status` settles it. Building the detector taught me to treat every intermediate abstraction as potentially lossy.
+- The strip decision happens in the container runtime, not the kubelet. Tracing the CRI request for Pod 3 and comparing it with the generated OCI spec was the moment the result became defensible.
+- A controlled pair (Pod 3 vs Pod 4) that changes one variable is worth more than a large uncontrolled test set. Reviewers and supervisors both pointed at that experiment first.
+- Honest limitations sections make the work stronger. The false positives of my own tool turned into the second contribution.
 
 ## Requirements
 
